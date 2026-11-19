@@ -14,6 +14,7 @@ class GenericObjectDefinition < ApplicationRecord
     :array    => N_('Array')
   }.freeze
 
+  # constraint => [supported by types]
   CONSTRAINT_TYPES = {
     :required      => %i[boolean datetime float integer string time hash array],
     :default       => %i[boolean datetime float integer string time hash array],
@@ -27,7 +28,8 @@ class GenericObjectDefinition < ApplicationRecord
     :max_items     => %i[array],
     :unique_items  => %i[array],
     :required_keys => %i[hash],
-    :allowed_keys  => %i[hash]
+    :allowed_keys  => %i[hash],
+    :encrypted     => %i[string]
   }.freeze
 
   FEATURES = %w[attribute attribute_constraint association method].freeze
@@ -79,6 +81,13 @@ class GenericObjectDefinition < ApplicationRecord
     property_attribute_defined?(attr) || property_association_defined?(attr) || property_method_defined?(attr)
   end
 
+  def property_attribute_encrypted?(attr)
+    constraints = property_attribute_constraints[attr.to_s]
+    return false unless constraints.kind_of?(Hash)
+
+    constraints[:encrypted] == true || constraints['encrypted'] == true
+  end
+
   def create_object(options)
     GenericObject.create!({:generic_object_definition => self}.merge(options))
   end
@@ -101,11 +110,18 @@ class GenericObjectDefinition < ApplicationRecord
       raise err_msg
     end
 
+    json_options.each do |k, v|
+      json_options[k] = ManageIQ::Password.try_encrypt(v) if property_attribute_encrypted?(k)
+    end
+
     generic_objects.where(ar_options).where("properties @> ?", json_options.to_json)
   end
 
   def property_getter(attr, val)
-    return type_cast(attr, val) if property_attribute_defined?(attr)
+    if property_attribute_defined?(attr)
+      val = ManageIQ::Password.try_decrypt(val) if property_attribute_encrypted?(attr)
+      return type_cast(attr, val)
+    end
 
     get_objects_of_association(attr, val) if property_association_defined?(attr)
   end
@@ -290,6 +306,8 @@ class GenericObjectDefinition < ApplicationRecord
       errors.add(:properties, _("constraint 'unique_items' must be true or false for attribute [%{attr_name}]") % {:attr_name => attr_name}) unless [true, false].include?(value)
     when :required_keys, :allowed_keys
       errors.add(:properties, _("constraint '%{constraint_type}' must be an array of strings/symbols for attribute [%{attr_name}]") % {:constraint_type => constraint_type, :attr_name => attr_name}) unless value.kind_of?(Array) && value.all? { |k| k.kind_of?(String) || k.kind_of?(Symbol) }
+    when :encrypted
+      errors.add(:properties, _("constraint 'encrypted' must be true or false for attribute [%{attr_name}]") % {:attr_name => attr_name}) unless [true, false].include?(value)
     end
   end
 

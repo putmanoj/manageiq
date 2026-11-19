@@ -1196,5 +1196,62 @@ RSpec.describe GenericObjectDefinition do
         expect { testdef.save! }.to raise_error(ActiveRecord::RecordInvalid, /is not applicable to attribute type/)
       end
     end
+
+    context 'encrypted constraint' do
+      it 'accepts encrypted constraint for string attributes' do
+        testdef = described_class.new(
+          :name       => 'test',
+          :properties => {
+            :attributes            => {:password => :string, :token => :string},
+            :attribute_constraints => {:password => {:encrypted => true}, :token => {:encrypted => false}}
+          }
+        )
+        expect(testdef).to be_valid
+      end
+
+      it 'rejects non-boolean value for encrypted constraint' do
+        testdef = described_class.new(
+          :name       => 'test',
+          :properties => {
+            :attributes            => {:password => :string},
+            :attribute_constraints => {:password => {:encrypted => 'yes'}}
+          }
+        )
+        expect { testdef.save! }.to raise_error(ActiveRecord::RecordInvalid, /constraint 'encrypted' must be true or false for attribute \[password\]/)
+      end
+
+      it 'rejects encrypted constraint on integer attribute' do
+        testdef = described_class.new(
+          :name       => 'test',
+          :properties => {
+            :attributes            => {:pin => :integer},
+            :attribute_constraints => {:pin => {:encrypted => true}}
+          }
+        )
+        expect { testdef.save! }.to raise_error(ActiveRecord::RecordInvalid, /constraint \[encrypted\] is not applicable to attribute type \[integer\] for attribute \[pin\]/)
+      end
+
+      it 'rejects encrypted constraint on boolean attribute' do
+        testdef = described_class.new(
+          :name       => 'test',
+          :properties => {
+            :attributes            => {:flag => :boolean},
+            :attribute_constraints => {:flag => {:encrypted => true}}
+          }
+        )
+        expect { testdef.save! }.to raise_error(ActiveRecord::RecordInvalid, /constraint \[encrypted\] is not applicable to attribute type \[boolean\] for attribute \[flag\]/)
+      end
+
+      it 'rejects encrypted constraint on hash attribute' do
+        testdef = described_class.new(
+          :name       => 'test',
+          :properties => {
+            :attributes            => {:secrets => :hash},
+            :attribute_constraints => {:secrets => {:encrypted => true}}
+          }
+        )
+        expect { testdef.save! }.to raise_error(ActiveRecord::RecordInvalid, /constraint \[encrypted\] is not applicable to attribute type \[hash\] for attribute \[secrets\]/)
+      end
+    end
   end
 end
