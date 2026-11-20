@@ -1219,5 +1219,136 @@ RSpec.describe GenericObject do
         expect(obj.errors[:properties].size).to be >= 2
       end
     end
+
+    context 'encrypted constraint' do
+      let(:definition_with_encrypt) do
+        FactoryBot.create(
+          :generic_object_definition,
+          :name       => 'secret_definition',
+          :properties => {
+            :attributes            => {
+              :username      => :string,
+              :password      => :string,
+              :api_key       => :string,
+              :plain_note    => :string,
+              :secret_header => :string
+            },
+            :attribute_constraints => {
+              :password      => {:required => true, :min_length => 6, :encrypted => true},
+              :api_key       => {:format => /\A[A-Z0-9_]+\z/, :encrypted => true},
+              :plain_note    => {:encrypted => false},
+              :secret_header => {:default => 'default_secret', :encrypted => true}
+            },
+            :associations          => {},
+            :methods               => []
+          }
+        )
+      end
+
+      it 'encrypts attribute value in database when encrypted constraint is true' do
+        obj = GenericObject.create!(
+          :generic_object_definition => definition_with_encrypt,
+          :name                      => 'SecretObject',
+          :username                  => 'admin',
+          :password                  => 'secret_pass_123',
+          :api_key                   => 'API_KEY_456',
+          :plain_note                => 'public note'
+        )
+
+        raw_props = GenericObject.find(obj.id).read_attribute(:properties)
+        expect(raw_props['password']).not_to eq('secret_pass_123')
+        expect(ManageIQ::Password.encrypted?(raw_props['password'])).to be true
+        expect(ManageIQ::Password.decrypt(raw_props['password'])).to eq('secret_pass_123')
+
+        expect(raw_props['api_key']).not_to eq('API_KEY_456')
+        expect(ManageIQ::Password.encrypted?(raw_props['api_key'])).to be true
+        expect(ManageIQ::Password.decrypt(raw_props['api_key'])).to eq('API_KEY_456')
+
+        expect(raw_props['plain_note']).to eq('public note')
+        expect(ManageIQ::Password.encrypted?(raw_props['plain_note'])).to be false
+      end
+
+      it 'returns decrypted value via property getter and property_attributes' do
+        obj = GenericObject.create!(
+          :generic_object_definition => definition_with_encrypt,
+          :name                      => 'SecretObject',
+          :username                  => 'admin',
+          :password                  => 'secret_pass_123'
+        )
+
+        reloaded = GenericObject.find(obj.id)
+        expect(reloaded.password).to eq('secret_pass_123')
+        expect(reloaded.property_attributes['password']).to eq('secret_pass_123')
+      end
+
+      it 'validates constraints on unencrypted value before saving' do
+        obj = GenericObject.new(
+          :generic_object_definition => definition_with_encrypt,
+          :name                      => 'SecretObject',
+          :username                  => 'admin',
+          :password                  => 'short'
+        )
+        expect(obj).not_to be_valid
+        expect(obj.errors[:properties]).to include("attribute 'password' must be at least 6 characters long")
+      end
+
+      it 'validates constraints on existing encrypted object when updated' do
+        obj = GenericObject.create!(
+          :generic_object_definition => definition_with_encrypt,
+          :name                      => 'SecretObject',
+          :username                  => 'admin',
+          :password                  => 'secret_pass_123'
+        )
+
+        reloaded = GenericObject.find(obj.id)
+        reloaded.name = 'UpdatedSecretObject'
+        expect(reloaded).to be_valid
+        expect { reloaded.save! }.not_to raise_error
+
+        expect(reloaded.reload.password).to eq('secret_pass_123')
+      end
+
+      it 're-encrypts when updating an encrypted attribute' do
+        obj = GenericObject.create!(
+          :generic_object_definition => definition_with_encrypt,
+          :name                      => 'SecretObject',
+          :username                  => 'admin',
+          :password                  => 'secret_pass_123'
+        )
+
+        obj.password = 'new_secret_456'
+        obj.save!
+
+        raw_props = GenericObject.find(obj.id).read_attribute(:properties)
+        expect(ManageIQ::Password.encrypted?(raw_props['password'])).to be true
+        expect(ManageIQ::Password.decrypt(raw_props['password'])).to eq('new_secret_456')
+        expect(obj.reload.password).to eq('new_secret_456')
+      end
+
+      it 'encrypts default value' do
+        obj = GenericObject.create!(
+          :generic_object_definition => definition_with_encrypt,
+          :name                      => 'SecretObject',
+          :password                  => 'secret_pass_123'
+        )
+
+        raw_props = GenericObject.find(obj.id).read_attribute(:properties)
+        expect(ManageIQ::Password.encrypted?(raw_props['secret_header'])).to be true
+        expect(ManageIQ::Password.decrypt(raw_props['secret_header'])).to eq('default_secret')
+        expect(obj.secret_header).to eq('default_secret')
+      end
+
+      it 'allows finding objects by encrypted attribute' do
+        obj = GenericObject.create!(
+          :generic_object_definition => definition_with_encrypt,
+          :name                      => 'SecretObject',
+          :password                  => 'secret_pass_123',
+          :api_key                   => 'API_KEY_456'
+        )
+
+        found = definition_with_encrypt.find_objects(:api_key => 'API_KEY_456')
+        expect(found).to include(obj)
+      end
+    end
   end
 end

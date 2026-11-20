@@ -13,8 +13,10 @@ class GenericObject < ApplicationRecord
   validates :name, :presence => true
   before_validation :apply_default_values
   validate :validate_property_attribute_constraints
+  before_save :encrypt_properties
 
   delegate :property_attribute_defined?,
+           :property_attribute_encrypted?,
            :property_defined?,
            :type_cast,
            :property_association_defined?,
@@ -24,6 +26,8 @@ class GenericObject < ApplicationRecord
   delegate :name, :to => :generic_object_definition, :prefix => true, :allow_nil => false
   virtual_column :generic_object_definition_name, :type => :string
   before_destroy :remove_go_from_all_related_services
+
+  NON_VALIDATING_CONSTRAINTS = %i[default encrypted].freeze
 
   def initialize(attributes = {})
     # generic_object_definition will be set first since hash iteration is based on the order of key insertion
@@ -228,6 +232,19 @@ class GenericObject < ApplicationRecord
     end
   end
 
+  def encrypt_properties
+    return unless generic_object_definition
+
+    constraints = generic_object_definition.properties[:attribute_constraints] || {}
+
+    constraints.each_key do |attr_name|
+      next unless property_attribute_encrypted?(attr_name)
+      next if properties[attr_name].nil?
+
+      properties[attr_name] = ManageIQ::Password.try_encrypt(properties[attr_name])
+    end
+  end
+
   def validate_property_attribute_constraints
     return unless generic_object_definition
 
@@ -237,6 +254,7 @@ class GenericObject < ApplicationRecord
     constraints.each do |attr_name, attr_constraints|
       # Get value from properties hash (where custom attributes are stored)
       value = properties[attr_name]
+      value = ManageIQ::Password.try_decrypt(value) if property_attribute_encrypted?(attr_name)
       attr_type = attributes[attr_name]
 
       # Skip validation if attribute is not set (nil) unless it's required
@@ -254,10 +272,10 @@ class GenericObject < ApplicationRecord
       end
 
       attr_constraints.each do |constraint_type, constraint_value|
-        # Skip default constraint in validation (it's applied in before_validation)
-        next if constraint_type == :default
+        # Skip default and encrypted constraints in validation (default is applied in before_validation, encrypted is applied in before_save)
+        next if NON_VALIDATING_CONSTRAINTS.include?(constraint_type.to_sym)
 
-        validate_constraint(attr_name, value, constraint_type, constraint_value)
+        validate_constraint(attr_name, value, constraint_type.to_sym, constraint_value)
       end
     end
   end
@@ -297,6 +315,8 @@ class GenericObject < ApplicationRecord
         extra_keys = value.keys.map(&:to_s) - constraint_value.map(&:to_s)
         errors.add(:properties, _("attribute '%{attr_name}' has disallowed keys: %{extra_keys}") % {:attr_name => attr_name, :extra_keys => extra_keys.join(', ')}) if extra_keys.any?
       end
+    when :encrypted
+      nil
     end
   end
 end
